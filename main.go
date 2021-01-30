@@ -16,9 +16,12 @@ import (
 )
 
 type findingsInfo struct {
-	Name       string
-	Severity   string
-	Attributes []*ecr.Attribute
+	Name           string
+	Severity       string
+	PackageVersion string
+	PackageName    string
+	CVSS2VECTOR    string
+	CVSS2SCORE     string
 }
 
 var (
@@ -29,7 +32,7 @@ var (
 		Name:      "image_scan_findings",
 		Help:      "ECR Image Scan Findings",
 	},
-		[]string{"name", "severity", "attributes"},
+		[]string{"name", "severity", "package_version", "package_name", "CVSS2_VECTOR", "CVSS2_SCORE"},
 	)
 )
 
@@ -67,10 +70,12 @@ func snapshot() error {
 
 	for _, findingsInfo := range findingsInfos {
 		labels := prometheus.Labels{
-			"name":       findingsInfo.Name,
-			"severity":   findingsInfo.Severity,
-			"attributes": "hoge",
-			//			"attributes":     findingsInfo.Attributes,
+			"name":            findingsInfo.Name,
+			"severity":        findingsInfo.Severity,
+			"package_version": findingsInfo.PackageName,
+			"package_name":    findingsInfo.PackageName,
+			"CVSS2_VECTOR":    findingsInfo.CVSS2VECTOR,
+			"CVSS2_SCORE":     findingsInfo.CVSS2SCORE,
 		}
 		findings.With(labels).Set(1)
 	}
@@ -106,6 +111,13 @@ func getECRImageScanFindings() ([]findingsInfo, error) {
 		RepositoryName: aws.String("api"),
 	}
 
+	var (
+		packageVersion string
+		packageName    string
+		CVSS2VECTOR    string
+		CVSS2SCORE     string
+	)
+
 	for {
 		findings, err := svc.DescribeImageScanFindings(input)
 		if err != nil {
@@ -114,11 +126,27 @@ func getECRImageScanFindings() ([]findingsInfo, error) {
 
 		results := make([]findingsInfo, len(findings.ImageScanFindings.Findings))
 		for i, finding := range findings.ImageScanFindings.Findings {
-			results[i] = findingsInfo{
-				Name:       aws.StringValue(finding.Name),
-				Severity:   aws.StringValue(finding.Severity),
-				Attributes: finding.Attributes,
+			for _, attr := range finding.Attributes {
+				switch *attr.Key {
+				case "package_version":
+					packageVersion = *attr.Value
+				case "package_name":
+					packageName = *attr.Value
+				case "CVSS2_VECTOR":
+					CVSS2VECTOR = *attr.Value
+				case "CVSS2_SCORE":
+					CVSS2SCORE = *attr.Value
+				}
 			}
+			results[i] = findingsInfo{
+				Name:           aws.StringValue(finding.Name),
+				Severity:       aws.StringValue(finding.Severity),
+				PackageName:    packageVersion,
+				PackageVersion: packageName,
+				CVSS2VECTOR:    CVSS2VECTOR,
+				CVSS2SCORE:     CVSS2SCORE,
+			}
+			fmt.Printf("attributes: %#v", finding.Attributes)
 		}
 
 		findingsInfos = append(findingsInfos, results...)
