@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/aws/aws-sdk-go/service/ecr"
 	"log"
 	"net/http"
 	"os"
@@ -11,14 +10,15 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/ecr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type findingsInfo struct {
-	Name string
-	Severity            string
-	Attributes     []*ecr.Attribute
+	Name       string
+	Severity   string
+	Attributes []*ecr.Attribute
 }
 
 var (
@@ -67,10 +67,10 @@ func snapshot() error {
 
 	for _, findingsInfo := range findingsInfos {
 		labels := prometheus.Labels{
-			"name": findingsInfo.Name,
-			"severity":             findingsInfo.Severity,
+			"name":       findingsInfo.Name,
+			"severity":   findingsInfo.Severity,
 			"attributes": "hoge",
-//			"attributes":     findingsInfo.Attributes,
+			//			"attributes":     findingsInfo.Attributes,
 		}
 		findings.With(labels).Set(1)
 	}
@@ -99,24 +99,34 @@ func getECRImageScanFindings() ([]findingsInfo, error) {
 	}))
 
 	svc := ecr.New(sess)
+	findingsInfos := []findingsInfo{}
+
 	input := &ecr.DescribeImageScanFindingsInput{
-			ImageId: &ecr.ImageIdentifier{ImageTag: aws.String("develop")},
-			RepositoryName: aws.String("api"),
+		ImageId:        &ecr.ImageIdentifier{ImageTag: aws.String("develop")},
+		RepositoryName: aws.String("api"),
 	}
 
-	findings, err := svc.DescribeImageScanFindings(input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to describe image scan findings: %w", err)
-	}
-
-	findingsInfos := make([]findingsInfo, len(findings.ImageScanFindings.Findings))
-	for i, finding := range findings.ImageScanFindings.Findings {
-		findingsInfos[i] = findingsInfo{
-			Name: aws.StringValue(finding.Name),
-			Severity:            aws.StringValue(finding.Severity),
-			Attributes:     finding.Attributes,
+	for {
+		findings, err := svc.DescribeImageScanFindings(input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to describe image scan findings: %w", err)
 		}
-	}
 
-	return findingsInfos, nil
+		results := make([]findingsInfo, len(findings.ImageScanFindings.Findings))
+		for i, finding := range findings.ImageScanFindings.Findings {
+			results[i] = findingsInfo{
+				Name:       aws.StringValue(finding.Name),
+				Severity:   aws.StringValue(finding.Severity),
+				Attributes: finding.Attributes,
+			}
+		}
+
+		findingsInfos = append(findingsInfos, results...)
+
+		// Pagination
+		if findings.NextToken == nil {
+			return findingsInfos, nil
+		}
+		input.SetNextToken(*findings.NextToken)
+	}
 }
