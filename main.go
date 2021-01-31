@@ -25,6 +25,7 @@ type findingsInfo struct {
 	CVSS2VECTOR    string
 	CVSS2SCORE     string
 	ImageTag       string
+	RepoName       string
 }
 
 var (
@@ -35,7 +36,7 @@ var (
 		Name:      "image_scan_findings",
 		Help:      "ECR Image Scan Findings",
 	},
-		[]string{"name", "severity", "package_version", "package_name", "CVSS2_VECTOR", "CVSS2_SCORE", "image_tag"},
+		[]string{"name", "severity", "package_version", "package_name", "CVSS2_VECTOR", "CVSS2_SCORE", "image_tag", "repo_name"},
 	)
 )
 
@@ -85,6 +86,7 @@ func snapshot() error {
 			"CVSS2_VECTOR":    findingsInfo.CVSS2VECTOR,
 			"CVSS2_SCORE":     findingsInfo.CVSS2SCORE,
 			"image_tag":       findingsInfo.ImageTag,
+			"repo_name":       findingsInfo.RepoName,
 		}
 		findings.With(labels).Set(1)
 	}
@@ -143,7 +145,7 @@ func getECRImageScanFindings(repositories []string) ([]findingsInfo, error) {
 				} else if findings.ImageScanFindings == nil {
 					fmt.Printf("Skip the repository %v with imageTag %v. ImageScanStatus: Status %v Description %v\n", repo, imageTag, findings.ImageScanStatus.Status, findings.ImageScanStatus.Description)
 				} else {
-					results = generateFindingsInfos(findings, imageTag)
+					results = generateFindingsInfos(findings, imageTag, repo)
 				}
 
 				findingsInfos = append(findingsInfos, results...)
@@ -169,7 +171,7 @@ func getImageTags() ([]string, error) {
 	return imageTagsList, nil
 }
 
-func generateFindingsInfos(findings *ecr.DescribeImageScanFindingsOutput, imageTag string) []findingsInfo {
+func generateFindingsInfos(findings *ecr.DescribeImageScanFindingsOutput, imageTag string, repoName string) []findingsInfo {
 	var (
 		packageVersion string
 		packageName    string
@@ -199,6 +201,7 @@ func generateFindingsInfos(findings *ecr.DescribeImageScanFindingsOutput, imageT
 			CVSS2VECTOR:    CVSS2VECTOR,
 			CVSS2SCORE:     CVSS2SCORE,
 			ImageTag:       imageTag,
+			RepoName:       repoName,
 		}
 	}
 
