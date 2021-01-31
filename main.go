@@ -81,7 +81,7 @@ func snapshot() error {
 		labels := prometheus.Labels{
 			"name":            findingsInfo.Name,
 			"severity":        findingsInfo.Severity,
-			"package_version": findingsInfo.PackageName,
+			"package_version": findingsInfo.PackageVersion,
 			"package_name":    findingsInfo.PackageName,
 			"CVSS2_VECTOR":    findingsInfo.CVSS2VECTOR,
 			"CVSS2_SCORE":     findingsInfo.CVSS2SCORE,
@@ -196,8 +196,8 @@ func generateFindingsInfos(findings *ecr.DescribeImageScanFindingsOutput, imageT
 		results[i] = findingsInfo{
 			Name:           aws.StringValue(finding.Name),
 			Severity:       aws.StringValue(finding.Severity),
-			PackageName:    packageVersion,
-			PackageVersion: packageName,
+			PackageName:    packageName,
+			PackageVersion: packageVersion,
 			CVSS2VECTOR:    CVSS2VECTOR,
 			CVSS2SCORE:     CVSS2SCORE,
 			ImageTag:       imageTag,
