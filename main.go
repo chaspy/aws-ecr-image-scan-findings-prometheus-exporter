@@ -136,14 +136,14 @@ func getECRImageScanFindings(repositories []string) ([]findingsInfo, error) {
 				if aerr, ok := err.(awserr.Error); ok {
 					switch aerr.Code() {
 					case "ScanNotFoundException":
-						fmt.Printf("Skip the repository %v with imageTag %v. %v\n", repo, imageTag, err.Error())
+						log.Printf("Skip the repository %v with imageTag %v. %v\n", repo, imageTag, err.Error())
 					case "ImageNotFoundException":
-						fmt.Printf("Skip the repository %v with imageTag %v. %v\n", repo, imageTag, err.Error())
+						log.Printf("Skip the repository %v with imageTag %v. %v\n", repo, imageTag, err.Error())
 					default:
 						return nil, fmt.Errorf("failed to describe image scan findings: %w", err)
 					}
 				} else if findings.ImageScanFindings == nil {
-					fmt.Printf("Skip the repository %v with imageTag %v. ImageScanStatus: Status %v Description %v\n", repo, imageTag, findings.ImageScanStatus.Status, findings.ImageScanStatus.Description)
+					log.Printf("Skip the repository %v with imageTag %v. ImageScanStatus: Status %v Description %v\n", repo, imageTag, findings.ImageScanStatus.Status, findings.ImageScanStatus.Description)
 				} else {
 					results = generateFindingsInfos(findings, imageTag, repo)
 				}
