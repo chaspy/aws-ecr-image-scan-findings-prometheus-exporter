@@ -11,10 +11,10 @@ $ cp .envrc.sample .envrc
 # source .envrc
 ```
 
-|name|default|description|
-|----|-------|-----------|
-|AWS_API_INTERVAL|300|Duration time to call AWS API (in seconds)|
-|IMAGE_TAGS|""|Image Tags of the scan target, separated by comma|
+|name|default|required|description|
+|----|-------|--------|-----------|
+|AWS_API_INTERVAL|300|false|Duration time to call AWS API (in seconds)|
+|IMAGE_TAGS|-|true|Image Tags of the scan target, separated by comma|
 
 ## How to run
 
