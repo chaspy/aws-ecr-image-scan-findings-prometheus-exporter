@@ -55,7 +55,9 @@ func main() {
 
 		// register metrics as background
 		for range ticker.C {
+			log.Println("debug: start snapshot()")
 			err := snapshot()
+			log.Println("debug: end snapshot()")
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -116,7 +118,6 @@ func getECRImageScanFindings(repositories []string) ([]findingsInfo, error) {
 
 	svc := ecr.New(sess)
 	findingsInfos := []findingsInfo{}
-	results := []findingsInfo{}
 
 	imageTags, err := getImageTags()
 	if err != nil {
@@ -130,33 +131,46 @@ func getECRImageScanFindings(repositories []string) ([]findingsInfo, error) {
 				RepositoryName: aws.String(repo),
 			}
 
-			for {
-				findings, err := svc.DescribeImageScanFindings(input)
-				//nolint:gocritic,errorlint
-				if aerr, ok := err.(awserr.Error); ok {
-					switch aerr.Code() {
-					case "ScanNotFoundException":
-						log.Printf("Skip the repository %v with imageTag %v. %v\n", repo, imageTag, err.Error())
-					case "ImageNotFoundException":
-						log.Printf("Skip the repository %v with imageTag %v. %v\n", repo, imageTag, err.Error())
-					default:
-						return nil, fmt.Errorf("failed to describe image scan findings: %w", err)
-					}
-				} else if findings.ImageScanFindings == nil {
-					log.Printf("Skip the repository %v with imageTag %v. ImageScanStatus: Status %v Description %v\n", repo, imageTag, findings.ImageScanStatus.Status, findings.ImageScanStatus.Description)
-				} else {
-					results = generateFindingsInfos(findings, imageTag, repo)
-				}
-
-				findingsInfos = append(findingsInfos, results...)
-
-				// Pagination
-				if findings.NextToken == nil {
-					break
-				}
-				input.SetNextToken(*findings.NextToken)
+			result, err := describeImageScanFindings(svc, input, repo, imageTag)
+			if err != nil {
+				return nil, fmt.Errorf("failed to describe image scan findings: %w", err)
 			}
+
+			findingsInfos = append(findingsInfos, result...)
 		}
+	}
+	return findingsInfos, nil
+}
+
+func describeImageScanFindings(svc *ecr.ECR, input *ecr.DescribeImageScanFindingsInput, repo string, imageTag string) ([]findingsInfo, error) {
+	results := []findingsInfo{}
+	findingsInfos := []findingsInfo{}
+
+	for {
+		findings, err := svc.DescribeImageScanFindings(input)
+		//nolint:gocritic,errorlint
+		if aerr, ok := err.(awserr.Error); ok {
+			switch aerr.Code() {
+			case "ScanNotFoundException":
+				log.Printf("Skip the repository %v with imageTag %v. %v\n", repo, imageTag, err.Error())
+			case "ImageNotFoundException":
+				log.Printf("Skip the repository %v with imageTag %v. %v\n", repo, imageTag, err.Error())
+			default:
+				return nil, fmt.Errorf("failed to describe image scan findings: %w", err)
+			}
+		} else if findings.ImageScanFindings == nil {
+			log.Printf("Skip the repository %v with imageTag %v. ImageScanStatus: Status %v Description %v\n", repo, imageTag, findings.ImageScanStatus.Status, findings.ImageScanStatus.Description)
+		} else {
+			results = generateFindingsInfos(findings, imageTag, repo)
+		}
+
+		findingsInfos = append(findingsInfos, results...)
+
+		// Pagination
+		if findings.NextToken == nil {
+			break
+		}
+		input.SetNextToken(*findings.NextToken)
 	}
 	return findingsInfos, nil
 }
