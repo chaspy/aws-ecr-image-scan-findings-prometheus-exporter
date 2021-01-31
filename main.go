@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -55,7 +56,9 @@ func main() {
 
 		// register metrics as background
 		for range ticker.C {
+			log.Println("debug: start snapshot()")
 			err := snapshot()
+			log.Println("debug: end snapshot()")
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -72,23 +75,9 @@ func snapshot() error {
 		return fmt.Errorf("failed to get ECR Repositories: %w", err)
 	}
 
-	findingsInfos, err := getECRImageScanFindings(repositories)
+	err = getECRImageScanFindings(repositories)
 	if err != nil {
 		return fmt.Errorf("failed to read ECR Image Scan Findings infos: %w", err)
-	}
-
-	for _, findingsInfo := range findingsInfos {
-		labels := prometheus.Labels{
-			"name":            findingsInfo.Name,
-			"severity":        findingsInfo.Severity,
-			"package_version": findingsInfo.PackageVersion,
-			"package_name":    findingsInfo.PackageName,
-			"CVSS2_VECTOR":    findingsInfo.CVSS2VECTOR,
-			"CVSS2_SCORE":     findingsInfo.CVSS2SCORE,
-			"image_tag":       findingsInfo.ImageTag,
-			"repo_name":       findingsInfo.RepoName,
-		}
-		findings.With(labels).Set(1)
 	}
 
 	return nil
@@ -109,54 +98,90 @@ func getInterval() (int, error) {
 	return integerGithubAPIInterval, nil
 }
 
-func getECRImageScanFindings(repositories []string) ([]findingsInfo, error) {
+func getECRImageScanFindings(repositories []string) error {
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState: session.SharedConfigEnable,
 	}))
 
 	svc := ecr.New(sess)
-	findingsInfos := []findingsInfo{}
-	results := []findingsInfo{}
 
 	imageTags, err := getImageTags()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get image tags: %w", err)
+		return fmt.Errorf("failed to get image tags: %w", err)
 	}
+
+	var wg sync.WaitGroup
 
 	for _, repo := range repositories {
 		for _, imageTag := range imageTags {
-			input := &ecr.DescribeImageScanFindingsInput{
-				ImageId:        &ecr.ImageIdentifier{ImageTag: aws.String(imageTag)},
-				RepositoryName: aws.String(repo),
-			}
+			wg.Add(1)
 
-			for {
-				findings, err := svc.DescribeImageScanFindings(input)
-				//nolint:gocritic,errorlint
-				if aerr, ok := err.(awserr.Error); ok {
-					switch aerr.Code() {
-					case "ScanNotFoundException":
-						log.Printf("Skip the repository %v with imageTag %v. %v\n", repo, imageTag, err.Error())
-					case "ImageNotFoundException":
-						log.Printf("Skip the repository %v with imageTag %v. %v\n", repo, imageTag, err.Error())
-					default:
-						return nil, fmt.Errorf("failed to describe image scan findings: %w", err)
-					}
-				} else if findings.ImageScanFindings == nil {
-					log.Printf("Skip the repository %v with imageTag %v. ImageScanStatus: Status %v Description %v\n", repo, imageTag, findings.ImageScanStatus.Status, findings.ImageScanStatus.Description)
-				} else {
-					results = generateFindingsInfos(findings, imageTag, repo)
+			go func(svc *ecr.ECR, repo string, imageTag string) {
+				result, err := describeImageScanFindings(svc, repo, imageTag)
+				if err != nil {
+					log.Printf("failed to describe image scan findings: %v", err)
 				}
 
-				findingsInfos = append(findingsInfos, results...)
-
-				// Pagination
-				if findings.NextToken == nil {
-					break
-				}
-				input.SetNextToken(*findings.NextToken)
-			}
+				collectMetrics(result)
+				wg.Done()
+			}(svc, repo, imageTag)
 		}
+	}
+	wg.Wait()
+
+	return nil
+}
+
+func collectMetrics(findingsInfos []findingsInfo) {
+	for _, findingsInfo := range findingsInfos {
+		labels := prometheus.Labels{
+			"name":            findingsInfo.Name,
+			"severity":        findingsInfo.Severity,
+			"package_version": findingsInfo.PackageVersion,
+			"package_name":    findingsInfo.PackageName,
+			"CVSS2_VECTOR":    findingsInfo.CVSS2VECTOR,
+			"CVSS2_SCORE":     findingsInfo.CVSS2SCORE,
+			"image_tag":       findingsInfo.ImageTag,
+			"repo_name":       findingsInfo.RepoName,
+		}
+		findings.With(labels).Set(1)
+	}
+}
+
+func describeImageScanFindings(svc *ecr.ECR, repo string, imageTag string) ([]findingsInfo, error) {
+	results := []findingsInfo{}
+	findingsInfos := []findingsInfo{}
+
+	input := &ecr.DescribeImageScanFindingsInput{
+		ImageId:        &ecr.ImageIdentifier{ImageTag: aws.String(imageTag)},
+		RepositoryName: aws.String(repo),
+	}
+
+	for {
+		findings, err := svc.DescribeImageScanFindings(input)
+		//nolint:gocritic,errorlint
+		if aerr, ok := err.(awserr.Error); ok {
+			switch aerr.Code() {
+			case "ScanNotFoundException":
+				log.Printf("Skip the repository %v with imageTag %v. %v\n", repo, imageTag, err.Error())
+			case "ImageNotFoundException":
+				log.Printf("Skip the repository %v with imageTag %v. %v\n", repo, imageTag, err.Error())
+			default:
+				return nil, fmt.Errorf("failed to describe image scan findings: %w", err)
+			}
+		} else if findings.ImageScanFindings == nil {
+			log.Printf("Skip the repository %v with imageTag %v. ImageScanStatus: Status %v Description %v\n", repo, imageTag, findings.ImageScanStatus.Status, findings.ImageScanStatus.Description)
+		} else {
+			results = generateFindingsInfos(findings, imageTag, repo)
+		}
+
+		findingsInfos = append(findingsInfos, results...)
+
+		// Pagination
+		if findings.NextToken == nil {
+			break
+		}
+		input.SetNextToken(*findings.NextToken)
 	}
 	return findingsInfos, nil
 }
