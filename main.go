@@ -74,23 +74,9 @@ func snapshot() error {
 		return fmt.Errorf("failed to get ECR Repositories: %w", err)
 	}
 
-	findingsInfos, err := getECRImageScanFindings(repositories)
+	err = getECRImageScanFindings(repositories)
 	if err != nil {
 		return fmt.Errorf("failed to read ECR Image Scan Findings infos: %w", err)
-	}
-
-	for _, findingsInfo := range findingsInfos {
-		labels := prometheus.Labels{
-			"name":            findingsInfo.Name,
-			"severity":        findingsInfo.Severity,
-			"package_version": findingsInfo.PackageVersion,
-			"package_name":    findingsInfo.PackageName,
-			"CVSS2_VECTOR":    findingsInfo.CVSS2VECTOR,
-			"CVSS2_SCORE":     findingsInfo.CVSS2SCORE,
-			"image_tag":       findingsInfo.ImageTag,
-			"repo_name":       findingsInfo.RepoName,
-		}
-		findings.With(labels).Set(1)
 	}
 
 	return nil
@@ -111,17 +97,16 @@ func getInterval() (int, error) {
 	return integerGithubAPIInterval, nil
 }
 
-func getECRImageScanFindings(repositories []string) ([]findingsInfo, error) {
+func getECRImageScanFindings(repositories []string) error {
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState: session.SharedConfigEnable,
 	}))
 
 	svc := ecr.New(sess)
-	findingsInfos := []findingsInfo{}
 
 	imageTags, err := getImageTags()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get image tags: %w", err)
+		return fmt.Errorf("failed to get image tags: %w", err)
 	}
 
 	for _, repo := range repositories {
@@ -133,13 +118,29 @@ func getECRImageScanFindings(repositories []string) ([]findingsInfo, error) {
 
 			result, err := describeImageScanFindings(svc, input, repo, imageTag)
 			if err != nil {
-				return nil, fmt.Errorf("failed to describe image scan findings: %w", err)
+				return fmt.Errorf("failed to describe image scan findings: %w", err)
 			}
 
-			findingsInfos = append(findingsInfos, result...)
+			collectMetrics(result)
 		}
 	}
-	return findingsInfos, nil
+	return nil
+}
+
+func collectMetrics(findingsInfos []findingsInfo) {
+	for _, findingsInfo := range findingsInfos {
+		labels := prometheus.Labels{
+			"name":            findingsInfo.Name,
+			"severity":        findingsInfo.Severity,
+			"package_version": findingsInfo.PackageVersion,
+			"package_name":    findingsInfo.PackageName,
+			"CVSS2_VECTOR":    findingsInfo.CVSS2VECTOR,
+			"CVSS2_SCORE":     findingsInfo.CVSS2SCORE,
+			"image_tag":       findingsInfo.ImageTag,
+			"repo_name":       findingsInfo.RepoName,
+		}
+		findings.With(labels).Set(1)
+	}
 }
 
 func describeImageScanFindings(svc *ecr.ECR, input *ecr.DescribeImageScanFindingsInput, repo string, imageTag string) ([]findingsInfo, error) {
