@@ -111,12 +111,7 @@ func getECRImageScanFindings(repositories []string) error {
 
 	for _, repo := range repositories {
 		for _, imageTag := range imageTags {
-			input := &ecr.DescribeImageScanFindingsInput{
-				ImageId:        &ecr.ImageIdentifier{ImageTag: aws.String(imageTag)},
-				RepositoryName: aws.String(repo),
-			}
-
-			result, err := describeImageScanFindings(svc, input, repo, imageTag)
+			result, err := describeImageScanFindings(svc, repo, imageTag)
 			if err != nil {
 				return fmt.Errorf("failed to describe image scan findings: %w", err)
 			}
@@ -143,9 +138,14 @@ func collectMetrics(findingsInfos []findingsInfo) {
 	}
 }
 
-func describeImageScanFindings(svc *ecr.ECR, input *ecr.DescribeImageScanFindingsInput, repo string, imageTag string) ([]findingsInfo, error) {
+func describeImageScanFindings(svc *ecr.ECR, repo string, imageTag string) ([]findingsInfo, error) {
 	results := []findingsInfo{}
 	findingsInfos := []findingsInfo{}
+
+	input := &ecr.DescribeImageScanFindingsInput{
+		ImageId:        &ecr.ImageIdentifier{ImageTag: aws.String(imageTag)},
+		RepositoryName: aws.String(repo),
+	}
 
 	for {
 		findings, err := svc.DescribeImageScanFindings(input)
