@@ -102,13 +102,6 @@ func getInterval() (int, error) {
 }
 
 func getECRImageScanFindings() ([]findingsInfo, error) {
-	var (
-		packageVersion string
-		packageName    string
-		CVSS2VECTOR    string
-		CVSS2SCORE     string
-	)
-
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState: session.SharedConfigEnable,
 	}))
@@ -133,30 +126,7 @@ func getECRImageScanFindings() ([]findingsInfo, error) {
 				return nil, fmt.Errorf("failed to describe image scan findings: %w", err)
 			}
 
-			results := make([]findingsInfo, len(findings.ImageScanFindings.Findings))
-			for i, finding := range findings.ImageScanFindings.Findings {
-				for _, attr := range finding.Attributes {
-					switch *attr.Key {
-					case "package_version":
-						packageVersion = *attr.Value
-					case "package_name":
-						packageName = *attr.Value
-					case "CVSS2_VECTOR":
-						CVSS2VECTOR = *attr.Value
-					case "CVSS2_SCORE":
-						CVSS2SCORE = *attr.Value
-					}
-				}
-				results[i] = findingsInfo{
-					Name:           aws.StringValue(finding.Name),
-					Severity:       aws.StringValue(finding.Severity),
-					PackageName:    packageVersion,
-					PackageVersion: packageName,
-					CVSS2VECTOR:    CVSS2VECTOR,
-					CVSS2SCORE:     CVSS2SCORE,
-					ImageTag:       imageTag,
-				}
-			}
+			results := generateFindingsInfos(findings, imageTag)
 
 			findingsInfos = append(findingsInfos, results...)
 
@@ -178,4 +148,40 @@ func getImageTags() ([]string, error) {
 
 	imageTagsList := strings.Split(imageTags, ",")
 	return imageTagsList, nil
+}
+
+func generateFindingsInfos(findings *ecr.DescribeImageScanFindingsOutput, imageTag string) []findingsInfo {
+	var (
+		packageVersion string
+		packageName    string
+		CVSS2VECTOR    string
+		CVSS2SCORE     string
+	)
+
+	results := make([]findingsInfo, len(findings.ImageScanFindings.Findings))
+	for i, finding := range findings.ImageScanFindings.Findings {
+		for _, attr := range finding.Attributes {
+			switch *attr.Key {
+			case "package_version":
+				packageVersion = *attr.Value
+			case "package_name":
+				packageName = *attr.Value
+			case "CVSS2_VECTOR":
+				CVSS2VECTOR = *attr.Value
+			case "CVSS2_SCORE":
+				CVSS2SCORE = *attr.Value
+			}
+		}
+		results[i] = findingsInfo{
+			Name:           aws.StringValue(finding.Name),
+			Severity:       aws.StringValue(finding.Severity),
+			PackageName:    packageVersion,
+			PackageVersion: packageName,
+			CVSS2VECTOR:    CVSS2VECTOR,
+			CVSS2SCORE:     CVSS2SCORE,
+			ImageTag:       imageTag,
+		}
+	}
+
+	return results
 }
