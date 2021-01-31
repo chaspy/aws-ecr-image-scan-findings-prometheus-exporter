@@ -1,0 +1,2 @@
+export AWS_API_INTERVAL="30"
+export IMAGE_TAGS="production,develop"

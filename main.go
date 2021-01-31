@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -22,6 +23,7 @@ type findingsInfo struct {
 	PackageName    string
 	CVSS2VECTOR    string
 	CVSS2SCORE     string
+	ImageTag       string
 }
 
 var (
@@ -32,7 +34,7 @@ var (
 		Name:      "image_scan_findings",
 		Help:      "ECR Image Scan Findings",
 	},
-		[]string{"name", "severity", "package_version", "package_name", "CVSS2_VECTOR", "CVSS2_SCORE"},
+		[]string{"name", "severity", "package_version", "package_name", "CVSS2_VECTOR", "CVSS2_SCORE", "image_tag"},
 	)
 )
 
@@ -76,6 +78,7 @@ func snapshot() error {
 			"package_name":    findingsInfo.PackageName,
 			"CVSS2_VECTOR":    findingsInfo.CVSS2VECTOR,
 			"CVSS2_SCORE":     findingsInfo.CVSS2SCORE,
+			"image_tag":       findingsInfo.ImageTag,
 		}
 		findings.With(labels).Set(1)
 	}
@@ -99,18 +102,6 @@ func getInterval() (int, error) {
 }
 
 func getECRImageScanFindings() ([]findingsInfo, error) {
-	sess := session.Must(session.NewSessionWithOptions(session.Options{
-		SharedConfigState: session.SharedConfigEnable,
-	}))
-
-	svc := ecr.New(sess)
-	findingsInfos := []findingsInfo{}
-
-	input := &ecr.DescribeImageScanFindingsInput{
-		ImageId:        &ecr.ImageIdentifier{ImageTag: aws.String("develop")},
-		RepositoryName: aws.String("api"),
-	}
-
 	var (
 		packageVersion string
 		packageName    string
@@ -118,43 +109,73 @@ func getECRImageScanFindings() ([]findingsInfo, error) {
 		CVSS2SCORE     string
 	)
 
-	for {
-		findings, err := svc.DescribeImageScanFindings(input)
-		if err != nil {
-			return nil, fmt.Errorf("failed to describe image scan findings: %w", err)
+	sess := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
+
+	svc := ecr.New(sess)
+	findingsInfos := []findingsInfo{}
+
+	imageTags, err := getImageTags()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get image tags: %w", err)
+	}
+
+	for _, imageTag := range imageTags {
+		input := &ecr.DescribeImageScanFindingsInput{
+			ImageId:        &ecr.ImageIdentifier{ImageTag: aws.String(imageTag)},
+			RepositoryName: aws.String("api"),
 		}
 
-		results := make([]findingsInfo, len(findings.ImageScanFindings.Findings))
-		for i, finding := range findings.ImageScanFindings.Findings {
-			for _, attr := range finding.Attributes {
-				switch *attr.Key {
-				case "package_version":
-					packageVersion = *attr.Value
-				case "package_name":
-					packageName = *attr.Value
-				case "CVSS2_VECTOR":
-					CVSS2VECTOR = *attr.Value
-				case "CVSS2_SCORE":
-					CVSS2SCORE = *attr.Value
+		for {
+			findings, err := svc.DescribeImageScanFindings(input)
+			if err != nil {
+				return nil, fmt.Errorf("failed to describe image scan findings: %w", err)
+			}
+
+			results := make([]findingsInfo, len(findings.ImageScanFindings.Findings))
+			for i, finding := range findings.ImageScanFindings.Findings {
+				for _, attr := range finding.Attributes {
+					switch *attr.Key {
+					case "package_version":
+						packageVersion = *attr.Value
+					case "package_name":
+						packageName = *attr.Value
+					case "CVSS2_VECTOR":
+						CVSS2VECTOR = *attr.Value
+					case "CVSS2_SCORE":
+						CVSS2SCORE = *attr.Value
+					}
+				}
+				results[i] = findingsInfo{
+					Name:           aws.StringValue(finding.Name),
+					Severity:       aws.StringValue(finding.Severity),
+					PackageName:    packageVersion,
+					PackageVersion: packageName,
+					CVSS2VECTOR:    CVSS2VECTOR,
+					CVSS2SCORE:     CVSS2SCORE,
+					ImageTag:       imageTag,
 				}
 			}
-			results[i] = findingsInfo{
-				Name:           aws.StringValue(finding.Name),
-				Severity:       aws.StringValue(finding.Severity),
-				PackageName:    packageVersion,
-				PackageVersion: packageName,
-				CVSS2VECTOR:    CVSS2VECTOR,
-				CVSS2SCORE:     CVSS2SCORE,
+
+			findingsInfos = append(findingsInfos, results...)
+
+			// Pagination
+			if findings.NextToken == nil {
+				break
 			}
-			fmt.Printf("attributes: %#v", finding.Attributes)
+			input.SetNextToken(*findings.NextToken)
 		}
-
-		findingsInfos = append(findingsInfos, results...)
-
-		// Pagination
-		if findings.NextToken == nil {
-			return findingsInfos, nil
-		}
-		input.SetNextToken(*findings.NextToken)
 	}
+	return findingsInfos, nil
+}
+
+func getImageTags() ([]string, error) {
+	imageTags := os.Getenv("IMAGE_TAGS")
+	if len(imageTags) == 0 {
+		return []string{}, fmt.Errorf("missing environment variable: IMAGE_TAGS")
+	}
+
+	imageTagsList := strings.Split(imageTags, ",")
+	return imageTagsList, nil
 }
