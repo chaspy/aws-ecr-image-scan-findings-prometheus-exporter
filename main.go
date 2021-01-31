@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -109,16 +110,25 @@ func getECRImageScanFindings(repositories []string) error {
 		return fmt.Errorf("failed to get image tags: %w", err)
 	}
 
+	var wg sync.WaitGroup
+
 	for _, repo := range repositories {
 		for _, imageTag := range imageTags {
-			result, err := describeImageScanFindings(svc, repo, imageTag)
-			if err != nil {
-				return fmt.Errorf("failed to describe image scan findings: %w", err)
-			}
+			wg.Add(1)
 
-			collectMetrics(result)
+			go func(svc *ecr.ECR, repo string, imageTag string) {
+				result, err := describeImageScanFindings(svc, repo, imageTag)
+				if err != nil {
+					log.Printf("failed to describe image scan findings: %v", err)
+				}
+
+				collectMetrics(result)
+				wg.Done()
+			}(svc, repo, imageTag)
 		}
 	}
+	wg.Wait()
+
 	return nil
 }
 
