@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ecr"
 	"github.com/prometheus/client_golang/prometheus"
@@ -65,7 +66,12 @@ func main() {
 func snapshot() error {
 	findings.Reset()
 
-	findingsInfos, err := getECRImageScanFindings()
+	repositories, err := getECRRepositories()
+	if err != nil {
+		return fmt.Errorf("failed to get ECR Repositories: %w", err)
+	}
+
+	findingsInfos, err := getECRImageScanFindings(repositories)
 	if err != nil {
 		return fmt.Errorf("failed to read ECR Image Scan Findings infos: %w", err)
 	}
@@ -101,40 +107,53 @@ func getInterval() (int, error) {
 	return integerGithubAPIInterval, nil
 }
 
-func getECRImageScanFindings() ([]findingsInfo, error) {
+func getECRImageScanFindings(repositories []string) ([]findingsInfo, error) {
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState: session.SharedConfigEnable,
 	}))
 
 	svc := ecr.New(sess)
 	findingsInfos := []findingsInfo{}
+	results := []findingsInfo{}
 
 	imageTags, err := getImageTags()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get image tags: %w", err)
 	}
 
-	for _, imageTag := range imageTags {
-		input := &ecr.DescribeImageScanFindingsInput{
-			ImageId:        &ecr.ImageIdentifier{ImageTag: aws.String(imageTag)},
-			RepositoryName: aws.String("api"),
-		}
-
-		for {
-			findings, err := svc.DescribeImageScanFindings(input)
-			if err != nil {
-				return nil, fmt.Errorf("failed to describe image scan findings: %w", err)
+	for _, repo := range repositories {
+		for _, imageTag := range imageTags {
+			input := &ecr.DescribeImageScanFindingsInput{
+				ImageId:        &ecr.ImageIdentifier{ImageTag: aws.String(imageTag)},
+				RepositoryName: aws.String(repo),
 			}
 
-			results := generateFindingsInfos(findings, imageTag)
+			for {
+				findings, err := svc.DescribeImageScanFindings(input)
+				//nolint:gocritic,errorlint
+				if aerr, ok := err.(awserr.Error); ok {
+					switch aerr.Code() {
+					case "ScanNotFoundException":
+						fmt.Printf("Skip the repository %v with imageTag %v. %v\n", repo, imageTag, err.Error())
+					case "ImageNotFoundException":
+						fmt.Printf("Skip the repository %v with imageTag %v. %v\n", repo, imageTag, err.Error())
+					default:
+						return nil, fmt.Errorf("failed to describe image scan findings: %w", err)
+					}
+				} else if findings.ImageScanFindings == nil {
+					fmt.Printf("Skip the repository %v with imageTag %v. ImageScanStatus: Status %v Description %v\n", repo, imageTag, findings.ImageScanStatus.Status, findings.ImageScanStatus.Description)
+				} else {
+					results = generateFindingsInfos(findings, imageTag)
+				}
 
-			findingsInfos = append(findingsInfos, results...)
+				findingsInfos = append(findingsInfos, results...)
 
-			// Pagination
-			if findings.NextToken == nil {
-				break
+				// Pagination
+				if findings.NextToken == nil {
+					break
+				}
+				input.SetNextToken(*findings.NextToken)
 			}
-			input.SetNextToken(*findings.NextToken)
 		}
 	}
 	return findingsInfos, nil
@@ -184,4 +203,26 @@ func generateFindingsInfos(findings *ecr.DescribeImageScanFindingsOutput, imageT
 	}
 
 	return results
+}
+
+func getECRRepositories() ([]string, error) {
+	sess := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
+
+	svc := ecr.New(sess)
+
+	input := &ecr.DescribeRepositoriesInput{}
+
+	result, err := svc.DescribeRepositories(input)
+	if err != nil {
+		return []string{}, fmt.Errorf("failed to describe repositories: %w", err)
+	}
+
+	repositoryNames := make([]string, len(result.Repositories))
+	for i, repo := range result.Repositories {
+		repositoryNames[i] = *repo.RepositoryName
+	}
+
+	return repositoryNames, nil
 }
